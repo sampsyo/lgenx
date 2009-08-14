@@ -1,6 +1,7 @@
 --- A safe XML generation library.
 -- Genx is a C library by Tim Bray for generating well-formed XML. This is
 -- a simple Lua binding.
+module "genx"
 
 --- Create a new XML document.
 -- There are two ways to create an XML document. First, genx.new(file) creates
