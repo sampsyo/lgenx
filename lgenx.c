@@ -9,22 +9,33 @@
 
 typedef struct {
     genxWriter writer;
+    
+    lua_State *L; // lua state at last library call
+    int sender_sendref;
+    int sender_flushref;
 } document;
 
 document *newdoc(lua_State *L) {
     document *doc = (document *)lua_newuserdata(L, sizeof(document));
+    doc->writer = NULL;
+    doc->L = L;
+    doc->sender_sendref = LUA_REFNIL;
+    doc->sender_flushref = LUA_REFNIL;
     
     // set the new writer's identifying metatable
     luaL_getmetatable(L, LGENX_DOCUMENT);
     lua_setmetatable(L, -2);
     
-    doc->writer = genxNew(NULL, NULL, NULL);
+    // create a new genx writer with the document as userdata
+    doc->writer = genxNew(NULL, NULL, (void*)doc);
+    
     return doc;
 }
 
 document *checkdoc(lua_State *L, int index) {
     void *ud = luaL_checkudata(L, index, LGENX_DOCUMENT);
     luaL_argcheck(L, ud != NULL, index, "genx document expected");
+    ((document *)ud)->L = L; // update the current Lua state
     return (document *)ud;
 }
 
@@ -34,40 +45,108 @@ FILE **checkfile(lua_State *L, int index) {
     return (FILE **)ud;
 }
 
-static int handleError(lua_State *L, genxWriter writer, genxStatus status) {
+static void handleError(lua_State *L, genxWriter writer, genxStatus status) {
     if (status)
         luaL_error(L, genxLastErrorMessage(writer));
-    return 1;
 }
+
+genxStatus sender_send(void *userData, constUtf8 s) {
+    document *doc = (document *)userData; // the userdata is the document
+    lua_State *L = doc->L;
+    
+    lua_rawgeti(L, LUA_REGISTRYINDEX, doc->sender_sendref); // push send func
+    lua_pushstring(L, (char *)s); // argument: string to send
+    lua_call(L, 1, 0);
+    return GENX_SUCCESS;
+}
+
+genxStatus sender_sendBounded(void *userData, constUtf8 start, constUtf8 end) {
+    document *doc = (document *)userData;
+    lua_State *L = doc->L;
+    
+    lua_rawgeti(L, LUA_REGISTRYINDEX, doc->sender_sendref);
+    lua_pushlstring(L, (char *)start, (end-start));
+    lua_call(L, 1, 0);
+    return GENX_SUCCESS;
+}
+
+genxStatus sender_flush(void *userData) {
+    document *doc = (document *)userData;
+    lua_State *L = doc->L;
+    
+    // the flush function is optional, so make sure we have it
+    if (doc->sender_flushref != LUA_REFNIL) {
+        lua_rawgeti(L, LUA_REGISTRYINDEX, doc->sender_flushref);
+        lua_call(L, 0, 0);
+    }
+    return GENX_SUCCESS;
+}
+
+static genxSender sender = {sender_send, sender_sendBounded, sender_flush};
 
 
 
 static int lgenx_new(lua_State *L) {
-    FILE **fh = checkfile(L, 1);
+    document *doc;
+    genxStatus s;
     
-    document *doc = newdoc(L);
-    genxStatus s = genxStartDocFile(doc->writer, *fh);
-    return handleError(L, doc->writer, s);
+    if (lua_isfunction(L, 1)) {
+        // sender initialization
+        int sendref = LUA_REFNIL;
+        int flushref = LUA_REFNIL;
+        
+        // hold references to the sender functions
+        // first, send:
+        lua_pushvalue(L, 1);
+        sendref = luaL_ref(L, LUA_REGISTRYINDEX);
+        // then, flush (optional):
+        lua_pushvalue(L, 2);
+        if (lua_isfunction(L, -1))
+            flushref = luaL_ref(L, LUA_REGISTRYINDEX);
+        else
+            lua_pop(L, 1);
+        
+        doc = newdoc(L);
+        doc->sender_sendref = sendref;
+        doc->sender_flushref = flushref;
+        s = genxStartDocSender(doc->writer, &sender);
+    
+    } else if (lua_isuserdata(L, 1)) {
+        // file initializaiton
+        FILE **fh = checkfile(L, 1);
+        doc = newdoc(L);
+        s = genxStartDocFile(doc->writer, *fh);
+    
+    } else {
+        // incorrect invocation
+        luaL_error(L, "new() must be invoked with functions or a file");
+    }
+    
+    handleError(L, doc->writer, s);
+    return 1;
 }
 
 static int lgenx_comment(lua_State *L) {
     document *doc = checkdoc(L, 1);
     const char *text = luaL_checkstring(L, 2);
     genxStatus s = genxComment(doc->writer, (constUtf8)text);
-    return handleError(L, doc->writer, s);
+    handleError(L, doc->writer, s);
+    return 0;
 }
 
 static int lgenx_startElement(lua_State *L) {
     document *doc = checkdoc(L, 1);
     const char *name = luaL_checkstring(L, 2);
     genxStatus s = genxStartElementLiteral(doc->writer, NULL, (constUtf8)name);
-    return handleError(L, doc->writer, s);
+    handleError(L, doc->writer, s);
+    return 0;
 }
 
 static int lgenx_endElement(lua_State *L) {
     document *doc = checkdoc(L, 1);
     genxStatus s = genxEndElement(doc->writer);
-    return handleError(L, doc->writer, s);
+    handleError(L, doc->writer, s);
+    return 0;
 }
 
 static int lgenx_attribute(lua_State *L) {
@@ -78,22 +157,38 @@ static int lgenx_attribute(lua_State *L) {
                                            NULL,
                                            (constUtf8)key,
                                            (constUtf8)value);
-    return handleError(L, doc->writer, s);
+    handleError(L, doc->writer, s);
+    return 0;
 }
 
 static int lgenx_text(lua_State *L) {
     document *doc = checkdoc(L, 1);
     const char *text = luaL_checkstring(L, 2);
     genxStatus s = genxAddText(doc->writer, (constUtf8)text);
-    return handleError(L, doc->writer, s);
+    handleError(L, doc->writer, s);
+    return 0;
 }
 
 static int lgenx_close(lua_State *L) {
     document *doc = checkdoc(L, 1);
-    genxStatus s = genxEndDocument(doc->writer);
-    handleError(L, doc->writer, s);
-    s = genxDispose(w);
-    return handleError(L, doc->writer, s);
+    
+    if (doc->writer) { // not closed yet
+        // finish document
+        genxStatus s = genxEndDocument(doc->writer);
+        handleError(L, doc->writer, s);
+    
+        // release writer
+        genxDispose(doc->writer);
+        doc->writer = NULL; // mark as closed
+    }
+    
+    // release sender references, if present
+    if (doc->sender_sendref != LUA_REFNIL)
+        luaL_unref(L, LUA_REGISTRYINDEX, doc->sender_sendref);
+    if (doc->sender_flushref != LUA_REFNIL)
+        luaL_unref(L, LUA_REGISTRYINDEX, doc->sender_flushref);
+        
+    return 0;
 }
 
 
