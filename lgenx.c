@@ -13,6 +13,8 @@ typedef struct {
     lua_State *L; // lua state at last library call
     int sender_sendref;
     int sender_flushref;
+    
+    int fileref;
 } document;
 
 document *newdoc(lua_State *L) {
@@ -21,6 +23,7 @@ document *newdoc(lua_State *L) {
     doc->L = L;
     doc->sender_sendref = LUA_REFNIL;
     doc->sender_flushref = LUA_REFNIL;
+    doc->fileref = LUA_REFNIL;
     
     // set the new writer's identifying metatable
     luaL_getmetatable(L, LGENX_DOCUMENT);
@@ -115,6 +118,11 @@ static int lgenx_new(lua_State *L) {
         // file initializaiton
         FILE **fh = checkfile(L, 1);
         doc = newdoc(L);
+        
+        // hold a reference to the file object so it doesn't get collected
+        lua_pushvalue(L, 1);
+        doc->fileref = luaL_ref(L, LUA_REGISTRYINDEX);
+        
         s = genxStartDocFile(doc->writer, *fh);
     
     } else {
@@ -182,11 +190,19 @@ static int lgenx_close(lua_State *L) {
         doc->writer = NULL; // mark as closed
     }
     
-    // release sender references, if present
-    if (doc->sender_sendref != LUA_REFNIL)
+    // release references, if present
+    if (doc->sender_sendref != LUA_REFNIL) {
         luaL_unref(L, LUA_REGISTRYINDEX, doc->sender_sendref);
-    if (doc->sender_flushref != LUA_REFNIL)
+        doc->sender_sendref = LUA_REFNIL;
+    }
+    if (doc->sender_flushref != LUA_REFNIL) {
         luaL_unref(L, LUA_REGISTRYINDEX, doc->sender_flushref);
+        doc->sender_flushref = LUA_REFNIL;
+    }
+    if (doc->fileref != LUA_REFNIL) {
+        luaL_unref(L, LUA_REGISTRYINDEX, doc->fileref);
+        doc->fileref = LUA_REFNIL;
+    }
         
     return 0;
 }
