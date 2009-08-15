@@ -1,5 +1,5 @@
-package = "lgenx"
-version = "0.5-1"
+package = "genx"
+version = "0.5.0-1"
 source = {
    url = ""
 }
