@@ -1,16 +1,16 @@
 require 'genx'
 
 function testOutput(d)
-    d:startElement('document')
+    d:startElement('farm')
 
-    d:startElement('author')
-    d:attribute('awesome', 'true')
-    d:text('Adrian')
+    d:startElement('crop')
+    d:attribute('type', 'fruit')
+    d:text('Apricots')
     d:endElement()
 
-    d:startElement('body')
-    d:text('Hello, everybody')
-    d:comment('how are you?')
+    d:startElement('crop')
+    d:attribute('type', 'vegetable')
+    d:text('Zucchini')
     d:endElement()
 
     d:endElement()
