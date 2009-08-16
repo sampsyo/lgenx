@@ -1,7 +1,7 @@
 package = "genx"
 version = "0.5.0-1"
 source = {
-   url = "http://bitbucket.org/adrian/lgenx/downloads/genx-0.5.0.tar.gz"
+   url = "http://luaforge.net/frs/download.php/4197/genx-0.5.0.tar.gz"
 }
 description = {
    summary = "A library for safely generating XML.",
